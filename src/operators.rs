@@ -71,25 +71,70 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
 }
 
 pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
-    todo!("实现 rms_norm，计算前做一些必要的检查会帮助你后续调试")
+    assert!(x.shape() == y.shape());
+    assert!(w.shape().len() == 1);
+    
+    let shape : &Vec<usize> = x.shape();
+    let last_dim = *shape.last().unwrap();
+    assert!(last_dim == w.size());
+
+    let y_data = unsafe { y.data_mut() };
+    let x_data = x.data();
+    let w_data = w.data();
+    
+    let batch_size = x.size() / last_dim;
+    for i in 0..batch_size {
+        let base = i * last_dim;
+        let mean_square = (0..last_dim).map(|j| x_data[base+j].powi(2)).sum::<f32>()
+                / last_dim as f32;
+        let rms = (mean_square + epsilon).sqrt();
+        for j in 0..last_dim {
+            y_data[base+j] = (x_data[base+j] * w_data[j]) / rms;
+            println!("{}",&y_data[base+j]);
+        }
+    }
 }
 
 // y = silu(x) * y
 // hint: this is an element-wise operation
 pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
-    // let len = y.size();
-    // assert!(len == x.size());
+    let len = y.size();
+    assert!(len == x.size());
 
-    // let _y = unsafe { y.data_mut() };
-    // let _x = x.data();
-
-    todo!("实现 silu，这里给了一些前期准备工作的提示，你可以参考")
+    let y_data = unsafe { y.data_mut() };
+    let x_data = x.data();
+    
+    for i in 0..len {
+        let x_sigmoid = 1.0 / (1.0+ (-x_data[i]).exp());
+        let silu = x_sigmoid * x_data[i];
+        y_data[i] = silu * y_data[i];
+    }
 }
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
 pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
-    todo!("实现 matmul_transb，计算前做一些必要的检查会帮助你后续调试");
+    let m = a.shape().get(0).unwrap();
+    let k = a.shape().get(1).unwrap();
+    let n = b.shape().get(0).unwrap();
+    let _k = b.shape().get(1).unwrap();
+    assert!(k==_k);
+    assert!(c.shape().get(0).unwrap()==m);
+    assert!(c.shape().get(1).unwrap()==n);
+
+    let a_data = a.data();
+    let b_data = b.data();
+    let c_data = unsafe { c.data_mut() };
+    let dim = *k;
+    for i in 0..*m {
+        for j in 0..*n{
+            let mut dot : f32 = 0.0;
+            for k in 0..dim {
+                dot += a_data[i*dim+k] * b_data[j*dim+k];
+            }
+            c_data[i*n+j] = beta * c_data[i*n+j] + alpha * dot;
+        }
+    }
 }
 
 // Dot product of two tensors (treated as vectors)
