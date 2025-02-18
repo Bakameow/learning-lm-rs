@@ -5,13 +5,20 @@ mod operators;
 mod params;
 mod tensor;
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::{f32, path::PathBuf};
+use half::bf16;
+use operators::ToF32;
+use params::Load;
 use serde::{Deserialize, Serialize};
+use crate::config::LlamaConfigJson;
+
 use tokenizers::Tokenizer;
 use actix_web::{get, post, App, HttpResponse, HttpServer, Responder};
 
 #[derive(Serialize,Deserialize)]
 struct Request {
+    history: String,
     system_message: String,
     user_message: String,
 }
@@ -37,14 +44,14 @@ async fn story() -> impl Responder {
     HttpResponse::Ok().body(ans)
 }
 
-#[post("/chat")]
-async fn chat(request: String) -> impl Responder {
-    let prompt_json : Request = serde_json::from_str(&request).expect("Deserialize Prompt failed");
-    let project_dir = env!("CARGO_MANIFEST_DIR"); 
-    let model_dir = PathBuf::from(project_dir).join("models").join("chat");
-    let llama = model::Llama::<f32>::from_safetensors(&model_dir);
+fn chat_func<T>(model_dir: PathBuf,prompt: Request) -> String 
+where T: Default + Copy +Load + ToF32
+{
+    let llama = model::Llama::<T>::from_safetensors(&model_dir);
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
-    let input = format!("<|im_start|>system\n{0}<|im_end|>\n<|im_start|>user\n{1}<|im_end|>\n<|im_start|>assistant",prompt_json.system_message,prompt_json.user_message);
+    let input = format!("{0}<|im_start|>system\n{1}<|im_end|>\n<|im_start|>user\n{2}<|im_end|>\n<|im_start|>assistant",
+                        prompt.history,prompt.system_message,prompt.user_message);
+    println!("{}",&prompt.history);
     println!("{}",&input);
     let binding = tokenizer.encode(input, true).unwrap();
     let input_ids = binding.get_ids();
@@ -55,7 +62,21 @@ async fn chat(request: String) -> impl Responder {
         30,
         1.,
     );
-    let ans = tokenizer.decode(&output_ids, true).unwrap();
+    tokenizer.decode(&output_ids, true).unwrap()
+}
+
+#[post("/chat")]
+async fn chat(request: String) -> impl Responder {
+    let prompt_json : Request = serde_json::from_str(&request).expect("Deserialize Prompt failed");
+    let project_dir = env!("CARGO_MANIFEST_DIR"); 
+    let model_dir = PathBuf::from(project_dir).join("models").join("chat");
+    let config = File::open(model_dir.join("config.json")).unwrap();
+    let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
+    let ans = match config.torch_dtype.as_ref() {
+        "bfloat16" => chat_func::<bf16>(model_dir, prompt_json),
+        "float32" => chat_func::<f32>(model_dir, prompt_json),
+        _ => todo!()
+    };
     HttpResponse::Ok().body(ans)
 }
 
@@ -72,27 +93,18 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
-//const DIR : &str = "chat";
-//
-//fn main(){
-//    let project_dir = env!("CARGO_MANIFEST_DIR");
-//    let model_dir = PathBuf::from(project_dir).join("models").join(DIR);
-//    let llama = model::Llama::<f32>::from_safetensors(&model_dir);
-//    let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
-//    let mut input = format!("<|im_start|>system\n{0}<|im_end|>\n<|im_start|>user\n{1}<|im_end|>\n<|im_start|>assistant",&"you are a helpfull assistant",&"it is rainy.should i bring a umbralla with me?");
-//        if DIR == "story"{
-//        input = "Once upon a time".to_string();
-//    }
-//    println!("prompt = {}",&input);
-//    let binding = tokenizer.encode(input.clone(), true).unwrap();
-//    let input_ids = binding.get_ids();
-//    let output_ids = llama.generate(
-//        input_ids,
-//        500,
-//        0.8,
-//        30,
-//        1.0,
-//    );
-//    let ans = tokenizer.decode(&output_ids, true).unwrap();
-//    println!("{}",ans);
-//}
+#[test]
+fn infer_test(){
+    let dir = "chat";
+    let project_dir = env!("CARGO_MANIFEST_DIR");
+    let model_dir = PathBuf::from(project_dir).join("models").join(dir);
+    let config = File::open(model_dir.join("config.json")).unwrap();
+    let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
+    let prompt_json = Request {history:"".to_string(),system_message:"you are a helpful assistant".to_string(),user_message:"who are you?".to_string()};
+    let ans = match config.torch_dtype.as_ref() {
+        "bfloat16" => chat_func::<bf16>(model_dir, prompt_json),
+        "float32" => chat_func::<f32>(model_dir, prompt_json),
+        _ => todo!()
+    };
+    println!("{}",ans);
+}

@@ -1,7 +1,33 @@
+use std::f32;
+use half::bf16;
 use crate::tensor::Tensor;
 
+pub trait ToF32 {
+   fn to_f32(&self) -> f32; 
+}
+
+impl ToF32 for bf16 {
+    fn to_f32(&self) -> f32 {
+        (*self).to_f32()
+    }
+}
+
+impl ToF32 for f32 {
+    fn to_f32(&self) -> f32 {
+        *self
+    }
+}
+
+fn mul<T,U>(a:T,b:U) -> f32
+where T:Copy + Clone + Default + ToF32,
+      U:Copy + Clone + Default + ToF32,
+{
+    a.to_f32() * b.to_f32()
+}
 // get (row) vectors from a 2D table given a list of indices
-pub fn gather(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<f32>) {
+pub fn gather<T>(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<T>)
+where T:Copy + Clone + Default + ToF32,
+{
     let length = indices.size();
     let table_shape = table.shape();
     assert!(table_shape.len() == 2);
@@ -10,7 +36,10 @@ pub fn gather(y: &mut Tensor<f32>, indices: &Tensor<u32>, table: &Tensor<f32>) {
     for i in 0..length {
         let src = &table.data()[indices.data()[i] as usize * dim..][..dim];
         let dst = &mut unsafe { y.data_mut() }[i * dim..][..dim];
-        dst.copy_from_slice(src);
+        //dst.copy_from_slice(src);
+        for j in 0..src.len() {
+            dst[j] = src[j].to_f32();
+        }
     }
 }
 
@@ -70,7 +99,9 @@ pub fn masked_softmax(y: &mut Tensor<f32>) {
     }
 }
 
-pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: f32) {
+pub fn rms_norm<T>(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<T>, epsilon: f32) 
+where T:Copy + Clone + Default + ToF32,
+{
     //assert!(x.shape() == y.shape());
 
     assert!(w.shape().len() == 1);
@@ -90,7 +121,7 @@ pub fn rms_norm(y: &mut Tensor<f32>, x: &Tensor<f32>, w: &Tensor<f32>, epsilon: 
                 / last_dim as f32;
         let rms = (mean_square + epsilon).sqrt();
         for j in 0..last_dim {
-            y_data[base+j] = (x_data[base+j] * w_data[j]) / rms;
+            y_data[base+j] = mul(x_data[base+j], w_data[j]) / rms;
         }
     }
 }
@@ -113,7 +144,9 @@ pub fn swiglu(y: &mut Tensor<f32>, x: &Tensor<f32>) {
 
 // C = beta * C + alpha * A @ B^T
 // hint: You don't need to do an explicit transpose of B
-pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<f32>, alpha: f32) {
+pub fn matmul_transb<T>(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor<T>, alpha: f32)
+where T:Copy + Clone + Default + ToF32,
+{
     let m = a.shape().get(0).unwrap();
     let k = a.shape().get(1).unwrap();
     let n = b.shape().get(0).unwrap();
@@ -130,7 +163,7 @@ pub fn matmul_transb(c: &mut Tensor<f32>, beta: f32, a: &Tensor<f32>, b: &Tensor
         for j in 0..*n{
             let mut dot : f32 = 0.0;
             for k in 0..dim {
-                dot += a_data[i*dim+k] * b_data[j*dim+k];
+                dot += mul(a_data[i*dim+k], b_data[j*dim+k]);
             }
             c_data[i*n+j] = beta * c_data[i*n+j] + alpha * dot;
         }
@@ -233,7 +266,7 @@ fn test_rms_norm() {
     let mut y = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
     let x = Tensor::<f32>::new(vec![1., 2., 3., 4.], &vec![2, 2]);
     let w = Tensor::<f32>::new(vec![1., 2.], &vec![2]);
-    rms_norm(&mut y, &x, &w, 1e-6);
+    rms_norm::<f32>(&mut y, &x, &w, 1e-6);
     assert!(y.close_to(
         &Tensor::<f32>::new(
             vec![0.6324554, 2.5298216, 0.8485281, 2.2627416],

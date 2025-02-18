@@ -1,13 +1,14 @@
 use std::fs::File;
 use std::{f32, vec};
-
+use crate::operators::ToF32;
 use crate::config::LlamaConfigJson;
 use crate::kvcache::KVCache;
 use crate::operators as OP;
-use crate::params::LLamaParams;
+use crate::params::{LLamaParams,Load};
 use crate::tensor::Tensor;
 use safetensors::SafeTensors;
 use std::path::Path;
+
 pub struct Llama<T> {
     vocab: usize,           // vocab size
     n_layers: usize,        // number of layers
@@ -24,13 +25,15 @@ pub struct Llama<T> {
     eos_token_id: u32,      // end token id
 }
 
-impl Llama<f32> {
+impl<T> Llama<T> 
+where T: Default + Copy + ToF32 + Load
+{
     pub fn from_safetensors(model_dir: impl AsRef<Path>) -> Self {
         let config = File::open(model_dir.as_ref().join("config.json")).unwrap();
         let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
         let model_file = std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
         let safetensor = SafeTensors::deserialize(&model_file).unwrap();
-        let params = LLamaParams::<f32>::from_safetensors(&safetensor, &config);
+        let params = LLamaParams::<T>::from_safetensors(&safetensor, &config);
 
         Self {
             vocab: config.vocab_size,
@@ -177,8 +180,6 @@ fn self_attention(
     
     // 计算attention矩阵
     // attention的shape为(seq_len, n_q_h * total_seq_len)
-    //q.print();
-    //k.print();
     for h in 0..n_q_h {
         for row in 0..seq_len {
             for col in 0..total_seq_len {
@@ -202,17 +203,19 @@ fn self_attention(
     } 
 }
 
-fn mlp(
+fn mlp<T>(
     residual: &mut Tensor<f32>,
     hidden_states: &mut Tensor<f32>,
     gate: &mut Tensor<f32>,
     up: &mut Tensor<f32>,
-    w_up: &Tensor<f32>,
-    w_down: &Tensor<f32>,
-    w_gate: &Tensor<f32>,
-    rms_w: &Tensor<f32>,
+    w_up: &Tensor<T>,
+    w_down: &Tensor<T>,
+    w_gate: &Tensor<T>,
+    rms_w: &Tensor<T>,
     eps: f32,
-) {
+) 
+where T:Copy + Clone + Default + ToF32,
+{
     OP::rms_norm(hidden_states, residual, rms_w, eps);
     OP::matmul_transb(gate, 0.0, hidden_states, w_gate, 1.0);
     OP::matmul_transb(up, 0.0, hidden_states, w_up, 1.0);
