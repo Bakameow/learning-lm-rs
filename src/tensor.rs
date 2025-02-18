@@ -89,6 +89,19 @@ impl Tensor<f32> {
     }
 }
 
+impl Tensor<u32> {
+    #[allow(unused)]
+    pub fn print(&self){
+        println!("shpae: {:?}, offset: {}, length: {}", self.shape, self.offset, self.length);
+        let dim = self.shape()[self.shape().len() - 1];
+        let batch = self.length / dim;
+        for i in 0..batch {
+            let start = i * dim;
+            println!("{:?}", &self.data()[start..][..dim]);
+        }
+    }
+}
+
 #[inline]
 pub fn float_eq(x: &f32, y: &f32, rel: f32) -> bool {
     (x - y).abs() <= rel * (x.abs() + y.abs()) / 2.0

@@ -19,10 +19,10 @@ fn main() {
     print!("\n{}", input);
     let output_ids = llama.generate(
         input_ids,
-        500,
+        200,
         0.8,
         30,
-        1.,
+        0.,
     );
     println!("{}", tokenizer.decode(&output_ids, true).unwrap());
 }

@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::vec;
+use std::{f32, vec};
 
 use crate::config::LlamaConfigJson;
 use crate::kvcache::KVCache;
@@ -71,7 +71,7 @@ impl Llama<f32> {
 
         // Computation Starts Here
         // Embedding lookup
-        OP::gather(&mut residual, input, &self.params.embedding_table);
+        OP::gather(&mut residual, input, &self.params.embedding_table); // (seq, dim)
 
         for layer in 0..self.n_layers {
             OP::rms_norm(
@@ -79,8 +79,9 @@ impl Llama<f32> {
                 &residual,
                 &self.params.rms_att_w[layer],
                 self.eps,
-            );
-
+            );// (seq, dim)
+            // n_q_h query头个数
+            // dqkv 
             let q = (&mut q_buf).reshape(&vec![seq_len, self.n_q_h * self.dqkv]); // (seq, n_h * dqkv)
             let k = &mut cache.k_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
             let v = &mut cache.v_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
@@ -100,19 +101,24 @@ impl Llama<f32> {
 
             let full_k = &mut cache.k_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
             let full_v = &mut cache.v_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
-
-            todo!("self_attention(...)");
-            todo!("down_proj matmul and add residual");
-
-            todo!("mlp(...)");
+            
+            self_attention(&mut hidden_states, &mut att_scores, q, &full_k, &full_v, self.n_kv_h, n_groups, seq_len, total_seq_len, self.dqkv);
+            OP::matmul_transb(&mut residual, 1.0, &hidden_states, &self.params.wo[layer], 1.0);
+            mlp(&mut residual, &mut hidden_states, &mut gate_buf, &mut up_buf, 
+                &self.params.w_up[layer], &self.params.w_down[layer], &self.params.w_gate[layer],
+                &self.params.rms_ffn_w[layer], self.eps
+            );
         }
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
         // which contains the probabilities for the next token.
+        // 只获取MLP的最后一维，用于预测下一个token
         let mut logits = Tensor::<f32>::default(&vec![1, self.vocab]);
+        //hidden_states.print();
+        //println!("切片的起点是{}",(seq_len - 1) * self.d);
         let mut hidden_states = hidden_states.slice((seq_len - 1) * self.d, &vec![1, self.d]);
         let residual = residual.slice((seq_len - 1) * self.d, &vec![self.d]);
-
+        
         OP::rms_norm(
             &mut hidden_states,
             &residual,
@@ -134,9 +140,17 @@ impl Llama<f32> {
         temperature: f32,
     ) -> Vec<u32>{
         let mut result = Vec::<u32>::new();
-        
-        todo!("实现文本生成");
-        
+        let mut cache = self.new_cache();
+        let mut prompt = Tensor::new(token_ids.to_vec(),&vec![token_ids.len()]);
+        while result.len() < max_len {
+            let logits = self.forward(&prompt, &mut cache);
+            let token_id = OP::random_sample(&logits, top_p, top_k, temperature);
+            if token_id==self.eos_token_id{
+                break;
+            }
+            result.push(token_id);
+            prompt = Tensor::new(vec![token_id],&vec![1]);
+        }
         result
     }
 }
@@ -153,7 +167,46 @@ fn self_attention(
     total_seq_len: usize,
     dqkv: usize,
 ) {
-    todo!("Implement self_attention");
+    //todo!("Implement self_attention");
+    let n_q_h = n_kv_h * n_groups;
+    let q_dim = n_q_h * dqkv;
+    let kv_dim = n_kv_h * dqkv;
+    //let att_dim = seq_len * total_seq_len;
+    let att_dim = n_q_h * total_seq_len;
+    let q_data = q.data();
+    let k_data = k.data();
+    let v_data = v.data();
+    let mut att_data = unsafe { att_scores.data_mut() };
+    let mut hidden_data = unsafe { hidden_states.data_mut() };
+    
+    // 计算attention矩阵
+    // attention的shape为(seq_len, n_q_h * total_seq_len)
+    for h in 0..n_q_h {
+        for row in 0..seq_len {
+            for col in 0..total_seq_len {
+                let q_base = row * q_dim + h * dqkv;
+                let k_base = col * kv_dim + h/2 * dqkv;
+                
+                // let mut dot : f32 = 0.0;
+                // for d in 0..dqkv {
+                //     dot += q_data[q_base + d] * k_data[k_base + d];
+                // }
+                att_data[row * att_dim + h * total_seq_len + col] = (0..dqkv).map(|d| q_data[q_base + d] * k_data[k_base + d]).sum::<f32>() / (dqkv as f32).sqrt();
+            }
+        }
+    }
+    OP::masked_softmax(att_scores);
+    
+    let att = att_scores.data(); 
+    for h in 0..n_q_h {
+        for row in 0..seq_len {
+            for col in 0..dqkv {
+                let a_base = row * att_dim + h * total_seq_len;
+                let v_base = col + h/2 * dqkv;
+                hidden_data[row * q_dim + h * dqkv + col] = (0..total_seq_len).map(|d| att[a_base + d] * v_data[v_base + d * kv_dim]).sum::<f32>();
+            }
+        }
+    } 
 }
 
 fn mlp(
@@ -226,7 +279,7 @@ pub fn test_load_safetensors() {
     assert_eq!(model.d, 128);
     assert_eq!(model.dqkv, 16);
     assert_eq!(model.di, 384);
-
+    
     assert!(float_eq(&model.params.embedding_table.data()[50], &0.14453125, 1e-6));
     assert_eq!(model.params.lm_head.data()[10], model.params.embedding_table.data()[10]);
     assert!(float_eq(&model.params.rms_att_w[0].data()[10], &0.18652344, 1e-6));

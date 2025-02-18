@@ -23,9 +23,6 @@ pub struct LLamaParams<T> {
 impl LLamaParams<f32> {
     pub fn from_safetensors(safetensor: &SafeTensors, config: &LlamaConfigJson) -> Self {
         let names = safetensor.names();
-        for name in names{
-            println!("{}",name);
-        }
         //todo!("实现从safetensors文件的模型参数加载");
         let get_tensor = |name: &str| -> Tensor<f32> {
             let tensor_view = safetensor.tensor(name).expect(&format!("tensor {name} not found"));
