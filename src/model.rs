@@ -30,7 +30,7 @@ impl Llama<f32> {
         let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
         let model_file = std::fs::read(model_dir.as_ref().join("model.safetensors")).unwrap();
         let safetensor = SafeTensors::deserialize(&model_file).unwrap();
-        let params = LLamaParams::from_safetensors(&safetensor, &config);
+        let params = LLamaParams::<f32>::from_safetensors(&safetensor, &config);
 
         Self {
             vocab: config.vocab_size,
@@ -80,8 +80,6 @@ impl Llama<f32> {
                 &self.params.rms_att_w[layer],
                 self.eps,
             );// (seq, dim)
-            // n_q_h query头个数
-            // dqkv 
             let q = (&mut q_buf).reshape(&vec![seq_len, self.n_q_h * self.dqkv]); // (seq, n_h * dqkv)
             let k = &mut cache.k_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
             let v = &mut cache.v_cache(layer, past_seq_len); // (seq, n_kv_h * dqkv)
@@ -112,10 +110,7 @@ impl Llama<f32> {
 
         // No matter what seq_len, the output is always a 1D vector of length vocab,
         // which contains the probabilities for the next token.
-        // 只获取MLP的最后一维，用于预测下一个token
         let mut logits = Tensor::<f32>::default(&vec![1, self.vocab]);
-        //hidden_states.print();
-        //println!("切片的起点是{}",(seq_len - 1) * self.d);
         let mut hidden_states = hidden_states.slice((seq_len - 1) * self.d, &vec![1, self.d]);
         let residual = residual.slice((seq_len - 1) * self.d, &vec![self.d]);
         
@@ -168,29 +163,27 @@ fn self_attention(
     dqkv: usize,
 ) {
     //todo!("Implement self_attention");
+    assert!(hidden_states.size() == q.size());
+    assert!(att_scores.size() == n_kv_h*n_groups*seq_len*total_seq_len);
     let n_q_h = n_kv_h * n_groups;
     let q_dim = n_q_h * dqkv;
     let kv_dim = n_kv_h * dqkv;
-    //let att_dim = seq_len * total_seq_len;
     let att_dim = n_q_h * total_seq_len;
     let q_data = q.data();
     let k_data = k.data();
     let v_data = v.data();
-    let mut att_data = unsafe { att_scores.data_mut() };
-    let mut hidden_data = unsafe { hidden_states.data_mut() };
+    let att_data = unsafe { att_scores.data_mut() };
+    let hidden_data = unsafe { hidden_states.data_mut() };
     
     // 计算attention矩阵
     // attention的shape为(seq_len, n_q_h * total_seq_len)
+    //q.print();
+    //k.print();
     for h in 0..n_q_h {
         for row in 0..seq_len {
             for col in 0..total_seq_len {
                 let q_base = row * q_dim + h * dqkv;
-                let k_base = col * kv_dim + h/2 * dqkv;
-                
-                // let mut dot : f32 = 0.0;
-                // for d in 0..dqkv {
-                //     dot += q_data[q_base + d] * k_data[k_base + d];
-                // }
+                let k_base = col * kv_dim + h/n_groups * dqkv;
                 att_data[row * att_dim + h * total_seq_len + col] = (0..dqkv).map(|d| q_data[q_base + d] * k_data[k_base + d]).sum::<f32>() / (dqkv as f32).sqrt();
             }
         }
@@ -202,7 +195,7 @@ fn self_attention(
         for row in 0..seq_len {
             for col in 0..dqkv {
                 let a_base = row * att_dim + h * total_seq_len;
-                let v_base = col + h/2 * dqkv;
+                let v_base = col + h/n_groups * dqkv;
                 hidden_data[row * q_dim + h * dqkv + col] = (0..total_seq_len).map(|d| att[a_base + d] * v_data[v_base + d * kv_dim]).sum::<f32>();
             }
         }

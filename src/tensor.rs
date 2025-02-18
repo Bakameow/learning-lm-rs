@@ -13,7 +13,7 @@ impl<T: Copy + Clone + Default> Tensor<T> {
             data: Arc::new(data.into_boxed_slice().try_into().unwrap()),
             shape: shape.clone(),
             offset: 0,
-            length: length,
+            length,
         }
     }
 
