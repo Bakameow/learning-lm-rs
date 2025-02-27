@@ -103,6 +103,7 @@ where T: Default + Copy + ToF32 + Load
             let full_k = &mut cache.k_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
             let full_v = &mut cache.v_cache(layer, 0); // (total_seq, n_kv_h * dqkv)
             
+            //let full_v = full_v.transpose(); 
             self_attention(&mut hidden_states, &mut att_scores, q, &full_k, &full_v, self.n_kv_h, n_groups, seq_len, total_seq_len, self.dqkv);
             OP::matmul_transb(&mut residual, 1.0, &hidden_states, &self.params.wo[layer], 1.0);
             mlp(&mut residual, &mut hidden_states, &mut gate_buf, &mut up_buf, 
@@ -158,14 +159,13 @@ fn self_attention(
     att_scores: &mut Tensor<f32>,    // (n_kv_h, n_groups, seq, total_seq)
     q: &Tensor<f32>,                 // (seq, n_kv_h * n_groups * dqkv)
     k: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv)
-    v: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv)
+    v: &Tensor<f32>,                 // (total_seq, n_kv_h * dqkv) or (n_kv_h * dqkv, total_seq)
     n_kv_h: usize,
     n_groups: usize,
     seq_len: usize,
     total_seq_len: usize,
     dqkv: usize,
 ) {
-    //todo!("Implement self_attention");
     assert!(hidden_states.size() == q.size());
     assert!(att_scores.size() == n_kv_h*n_groups*seq_len*total_seq_len);
     let n_q_h = n_kv_h * n_groups;
@@ -174,12 +174,16 @@ fn self_attention(
     let att_dim = n_q_h * total_seq_len;
     let q_data = q.data();
     let k_data = k.data();
+    //转置v矩阵，shape为(n_kv_h * dqkv, total_seq_len)
+    let v = v.transpose();
     let v_data = v.data();
     let att_data = unsafe { att_scores.data_mut() };
     let hidden_data = unsafe { hidden_states.data_mut() };
     
     // 计算attention矩阵
     // attention的shape为(seq_len, n_q_h * total_seq_len)
+    // query矩阵的每个head的shape为(seq_len, dqkv)
+    // key矩阵的每个head的shape为(total_seq_len, dqkv)
     for h in 0..n_q_h {
         for row in 0..seq_len {
             for col in 0..total_seq_len {
@@ -190,14 +194,19 @@ fn self_attention(
         }
     }
     OP::masked_softmax(att_scores);
-    
+     
     let att = att_scores.data(); 
+    // attention的shape为(seq_len, n_q_h * total_seq_len)
+    // v的shape为(n_kv_h * dqkv, total_seq_len)
+    // attention的每个head的shape为(seq_len, total_seq_len)
+    //
     for h in 0..n_q_h {
         for row in 0..seq_len {
             for col in 0..dqkv {
                 let a_base = row * att_dim + h * total_seq_len;
-                let v_base = col + h/n_groups * dqkv;
-                hidden_data[row * q_dim + h * dqkv + col] = (0..total_seq_len).map(|d| att[a_base + d] * v_data[v_base + d * kv_dim]).sum::<f32>();
+                //let v_base = col + h/n_groups * dqkv;
+                let v_base = col * total_seq_len + h/n_groups * dqkv * total_seq_len;
+                hidden_data[row * q_dim + h * dqkv + col] = (0..total_seq_len).map(|d| att[a_base + d] * v_data[v_base + d]).sum::<f32>();
             }
         }
     } 

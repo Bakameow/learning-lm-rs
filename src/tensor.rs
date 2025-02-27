@@ -62,6 +62,23 @@ impl<T: Copy + Clone + Default> Tensor<T> {
         }
     }
 
+    pub fn transpose(&self) -> Self {
+        let old_shape = self.shape().clone();
+        let (row,col) = (old_shape[0],old_shape[1]);
+        let shape = vec![col,row];
+        let mut data = vec![T::default(); row * col];
+        for i in 0..row {
+            for j in 0..col {
+                data[j*row+i] = self.data()[i*col+j];
+            }
+        }
+        Tensor {
+            data:Arc::new(data.into_boxed_slice().try_into().unwrap()),
+            shape:shape.clone(),
+            offset:0,
+            length:self.length,
+        }
+    }
 
 }
 

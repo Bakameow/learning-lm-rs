@@ -6,6 +6,8 @@ mod params;
 mod tensor;
 
 use std::fs::File;
+use std::sync::Arc;
+use dashmap::DashMap;
 use std::{f32, path::PathBuf};
 use half::bf16;
 use operators::ToF32;
@@ -14,10 +16,11 @@ use serde::{Deserialize, Serialize};
 use crate::config::LlamaConfigJson;
 
 use tokenizers::Tokenizer;
-use actix_web::{get, post, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, post, App, web, HttpResponse, HttpServer, Responder};
 
 #[derive(Serialize,Deserialize)]
 struct Request {
+    session_id: String,
     history: String,
     system_message: String,
     user_message: String,
@@ -44,7 +47,7 @@ async fn story() -> impl Responder {
     HttpResponse::Ok().body(ans)
 }
 
-fn chat_func<T>(model_dir: PathBuf,prompt: Request) -> String 
+fn chat_func<T>(model_dir: PathBuf,prompt: &Request) -> String 
 where T: Default + Copy +Load + ToF32
 {
     let llama = model::Llama::<T>::from_safetensors(&model_dir);
@@ -66,25 +69,32 @@ where T: Default + Copy +Load + ToF32
 }
 
 #[post("/chat")]
-async fn chat(request: String) -> impl Responder {
-    let prompt_json : Request = serde_json::from_str(&request).expect("Deserialize Prompt failed");
+async fn chat(request: String, app_data: web::Data<Arc<DashMap<String, String>>>) -> impl Responder {
+    println!("{}",&request);
+    let mut prompt_json : Request = serde_json::from_str(&request).expect("Deserialize Prompt failed");
+    //let map = app_data.as_ref();
+    //let session_id = prompt_json.session_id.clone();
+    //prompt_json.history = map.get(&prompt_json.session_id).unwrap().to_string()
     let project_dir = env!("CARGO_MANIFEST_DIR"); 
     let model_dir = PathBuf::from(project_dir).join("models").join("chat");
     let config = File::open(model_dir.join("config.json")).unwrap();
     let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
     let ans = match config.torch_dtype.as_ref() {
-        "bfloat16" => chat_func::<bf16>(model_dir, prompt_json),
-        "float32" => chat_func::<f32>(model_dir, prompt_json),
+        "bfloat16" => chat_func::<bf16>(model_dir, &prompt_json),
+        "float32" => chat_func::<f32>(model_dir, &prompt_json),
         _ => todo!()
     };
+    //map.insert(session_id,format!("{0}<|im_start|>system\n{1}<|im_end|>\n<|im_start|>user\n{2}<|im_end|>\n<|im_start|>assistant{3}",prompt_json.history,prompt_json.system_message,prompt_json.user_message,ans.clone()));
     HttpResponse::Ok().body(ans)
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let app_data = web::Data::new(Arc::new(DashMap::<String,String>::new())); 
     println!("Server running on http://127.0.0.1:8080");
-    HttpServer::new(|| {
+    HttpServer::new(move || {
         App::new()
+            .app_data(app_data.clone())
             .service(story)
             .service(chat)
     })
@@ -100,10 +110,10 @@ fn infer_test(){
     let model_dir = PathBuf::from(project_dir).join("models").join(dir);
     let config = File::open(model_dir.join("config.json")).unwrap();
     let config: LlamaConfigJson = serde_json::from_reader(config).unwrap();
-    let prompt_json = Request {history:"".to_string(),system_message:"you are a helpful assistant".to_string(),user_message:"who are you?".to_string()};
+    let prompt_json = Request {session_id:"".to_string(),history:"".to_string(),system_message:"you are a helpful assistant".to_string(),user_message:"who are you?".to_string()};
     let ans = match config.torch_dtype.as_ref() {
-        "bfloat16" => chat_func::<bf16>(model_dir, prompt_json),
-        "float32" => chat_func::<f32>(model_dir, prompt_json),
+        "bfloat16" => chat_func::<bf16>(model_dir, &prompt_json),
+        "float32" => chat_func::<f32>(model_dir, &prompt_json),
         _ => todo!()
     };
     println!("{}",ans);
