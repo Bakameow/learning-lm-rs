@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import hashlib
 from streamlit import success
-
+import datetime
 
 def generate_hash(input_string: str, hash_algorithm: str = 'sha256') -> str:
     hash_func = hashlib.new(hash_algorithm)
@@ -10,36 +10,67 @@ def generate_hash(input_string: str, hash_algorithm: str = 'sha256') -> str:
     return hash_func.hexdigest()
 
 def login_page():
-    name = st.text_input("输入用户名")
-    if name and st.button("确认"):
-        st.session_state.logged_in = True
-        if "user_id" not in st.session_state:
-            st.session_state.user_id = generate_hash(name)
-
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
+    with st.form(key="login_form"):
+        name = st.text_input("输入用户名")
+        submitted = st.form_submit_button("登录")
+        if name and submitted:
+            st.session_state.logged_in = True
+            if "user_id" not in st.session_state:
+                st.session_state.user_id = generate_hash(name)
+            if "sessions" not in st.session_state:
+                st.session_state.sessions = {
+                    "会话0": {
+                        "messages": [],
+                        "created": datetime.datetime.now()
+                    }
+                }
+            st.session_state.current_session = "会话0"
+            st.rerun()
 
 def chat_page():
-    # React to user input
-    # Display chat messages from history on app rerun
-    for message in st.session_state.messages:
+    with st.sidebar:
+        st.subheader("历史会话")
+        cols = st.columns(1)  # 每行显示2个会话
+        # print(len(st.session_state.sessions))
+        for i, session in enumerate(st.session_state.sessions):
+            with cols[0]:
+                if st.button(
+                    session,
+                    use_container_width=True,
+                    type="primary" if session == st.session_state.current_session else "secondary"
+                ):
+                    st.session_state.current_session = session
+                    st.rerun()
+
+        if st.button("➕新建会话", use_container_width=True):
+            new_session = f"会话{len(st.session_state.sessions)}"
+            st.session_state.sessions[new_session] = {
+                "messages": [],
+                "created": datetime.datetime.now()
+            }
+            st.session_state.current_session = new_session
+            st.rerun()
+    # 显示历史记录
+    history = st.session_state.sessions[st.session_state.current_session]["messages"]
+    for message in history:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-    global history
+
     if prompt := st.chat_input("向ChatBot发消息"):
         with st.chat_message("user"):
             st.markdown(prompt)
-        # Add user message to chat history
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        data = {"session_id":st.session_state.user_id,
+        
+        data = {"session_id":generate_hash(st.session_state.user_id+st.session_state.current_session),
                 "history":"",
                 "system_message":"you are a helpful assistant.",
                 "user_message":prompt}
         response = requests.post('http://localhost:8080/chat',json=data)
         with st.chat_message("assistant"):
             st.markdown(response.text)
-        st.session_state.messages.append({"role": "assistant", "content": response.text})
+        
+        # 添加消息到历史记录
+        history.append({"role": "user", "content": prompt})
+        history.append({"role": "assistant", "content": response.text})
 
 
 def main():

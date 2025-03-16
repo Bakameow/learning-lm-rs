@@ -18,7 +18,7 @@ use crate::config::LlamaConfigJson;
 use tokenizers::Tokenizer;
 use actix_web::{get, post, App, web, HttpResponse, HttpServer, Responder};
 
-#[derive(Serialize,Deserialize)]
+#[derive(Serialize,Deserialize,Debug)]
 struct Request {
     session_id: String,
     history: String,
@@ -54,13 +54,13 @@ where T: Default + Copy +Load + ToF32
     let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json")).unwrap();
     let input = format!("{0}<|im_start|>system\n{1}<|im_end|>\n<|im_start|>user\n{2}<|im_end|>\n<|im_start|>assistant",
                         prompt.history,prompt.system_message,prompt.user_message);
-    println!("{}",&prompt.history);
-    println!("{}",&input);
+    println!("{}\n",(|| "-".repeat(50))());
+    // println!("{}\n{}",(|| "-".repeat(50))(),&input);
     let binding = tokenizer.encode(input, true).unwrap();
     let input_ids = binding.get_ids();
     let output_ids = llama.generate(
         input_ids,
-        200,
+        100,
         0.8,
         30,
         1.,
@@ -69,12 +69,11 @@ where T: Default + Copy +Load + ToF32
 }
 
 #[post("/chat")]
-async fn chat(request: String, app_data: web::Data<Arc<DashMap<String, String>>>) -> impl Responder {
-    println!("{}",&request);
-    let mut prompt_json : Request = serde_json::from_str(&request).expect("Deserialize Prompt failed");
-    //let map = app_data.as_ref();
-    //let session_id = prompt_json.session_id.clone();
-    //prompt_json.history = map.get(&prompt_json.session_id).unwrap().to_string()
+async fn chat(mut prompt_json: web::Json<Request>, app_data: web::Data<Arc<DashMap<String, String>>>) -> impl Responder {
+    println!("\n{}\nreceive request from session_id = {{{}}}\n{:?}",(|| "-".repeat(50))(),&prompt_json.session_id,&prompt_json);
+    let map = app_data.as_ref();
+    let history = map.get(&prompt_json.session_id).map(|v| v.to_string()).unwrap_or_default();
+    prompt_json.history = history;
     let project_dir = env!("CARGO_MANIFEST_DIR"); 
     let model_dir = PathBuf::from(project_dir).join("models").join("chat");
     let config = File::open(model_dir.join("config.json")).unwrap();
@@ -84,7 +83,7 @@ async fn chat(request: String, app_data: web::Data<Arc<DashMap<String, String>>>
         "float32" => chat_func::<f32>(model_dir, &prompt_json),
         _ => todo!()
     };
-    //map.insert(session_id,format!("{0}<|im_start|>system\n{1}<|im_end|>\n<|im_start|>user\n{2}<|im_end|>\n<|im_start|>assistant{3}",prompt_json.history,prompt_json.system_message,prompt_json.user_message,ans.clone()));
+    map.insert(prompt_json.session_id.clone(),format!("{0}<|im_start|>system\n{1}<|im_end|>\n<|im_start|>user\n{2}<|im_end|>\n<|im_start|>assistant{3}\n",prompt_json.history,prompt_json.system_message,prompt_json.user_message,ans.clone()));
     HttpResponse::Ok().body(ans)
 }
 

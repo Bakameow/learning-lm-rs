@@ -8,7 +8,19 @@ use crate::params::{LLamaParams,Load};
 use crate::tensor::Tensor;
 use safetensors::SafeTensors;
 use std::path::Path;
+use std::time::Instant;
 
+
+// 定义宏 `measure_time`
+macro_rules! measure_time {
+    ($label:expr, $code:block) => {{
+        let start = Instant::now();
+        let result = { $code };
+        let elapsed = start.elapsed();
+        println!("Execute {{{}}} for {:.2?}", $label, elapsed);
+        result
+    }};
+}
 pub struct Llama<T> {
     vocab: usize,           // vocab size
     n_layers: usize,        // number of layers
@@ -142,7 +154,7 @@ where T: Default + Copy + ToF32 + Load
         let mut cache = self.new_cache();
         let mut prompt = Tensor::new(token_ids.to_vec(),&vec![token_ids.len()]);
         while result.len() < max_len {
-            let logits = self.forward(&prompt, &mut cache);
+            let logits = measure_time!("forward",{self.forward(&prompt, &mut cache)});
             let token_id = OP::random_sample(&logits, top_p, top_k, temperature);
             if token_id==self.eos_token_id{
                 break;
